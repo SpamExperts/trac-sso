@@ -3,8 +3,8 @@ import hmac
 import urllib
 import hashlib
 import urlparse
+import collections
 
-from trac.config import Option
 from trac.web.main import IRequestHandler
 from trac.perm import IPermissionRequestor
 from trac.core import Component, implements
@@ -15,10 +15,20 @@ class SSO(Component):
 
     implements(IPermissionRequestor, IRequestHandler)
 
-    sso_secret = Option("sso", "sso_secret", doc="Secret key used to encrypt "
-                        "the payload.", default="")
-    sso_redirect = Option("sso", "sso_redirect", doc="Redirect page after "
-                          "succesful authentication.", default="")
+    def __init__(self, *args, **kwargs):
+        Component.__init__(self, *args, **kwargs)
+        self.__parse_config()
+
+    def __parse_config(self):
+        self.__endpoints = collections.defaultdict(dict)
+        for key, value in self.config.options("sso"):
+            try:
+                endpoint, option = key.split(".", 1)
+            except ValueError:
+                # The default endpoint is /sso
+                endpoint, option = "sso", key
+            self.__endpoints[endpoint][option] = value
+
 
     # IPermissionRequestor
     def get_permission_actions(self):
@@ -26,9 +36,14 @@ class SSO(Component):
 
     # IRequestHandler methods
     def match_request(self, req):
-        return req.path_info == '/sso'
+        if req.path_info.lstrip("/") in self.__endpoints: 
+            endpoint = self.__endpoints[req.path_info.lstrip("/")]
+            self.sso_secret = endpoint["sso_secret"]
+            self.sso_redirect = endpoint["sso_redirect"]
+            return True
+        return False
     
-    def _encode_message(self, payload):
+    def __encode_message(self, payload):
         """Encodes a payload as a SSO message and signature. "payload" is  
         a dictionary of key=value to send. 
         """
@@ -37,8 +52,8 @@ class SSO(Component):
                               hashlib.sha256).hexdigest()
         return urllib.urlencode({"sso": msg, "sig": signed_msg})
 
-    def _decode_message(self, payload, signature):
-        """Decodes SSO message and verifies it's signature using the shared 
+    def __decode_message(self, payload, signature):
+        """Decodes SSO message and verifies its signature using the shared 
         secret.
         """
         signed_payload = hmac.new(self.sso_secret.encode(), payload,
@@ -47,7 +62,7 @@ class SSO(Component):
             return {}
         return dict(urlparse.parse_qsl(payload.decode("base64")))
 
-    def _error(self, req, message, title="Invalid Request"):
+    def __error(self, req, message, title="Invalid Request"):
         data = {'title': title, 'type': '', 'message': message,
                 'frames': [], 'traceback': None}
         req.send_error(sys.exc_info(), env=self.env, data=data)
@@ -58,12 +73,12 @@ class SSO(Component):
             payload = req.args["sso"].encode()
             signature = req.args["sig"].encode()
         except (KeyError, UnicodeError):
-            self._error(req, "Invalid Request")
+            self.__error(req, "Invalid Request")
 
         try:
-            nonce = self._decode_message(payload, signature)["nonce"]
+            nonce = self.__decode_message(payload, signature)["nonce"]
         except KeyError:
-            self._error(req, "Invalid Request")
+            self.__error(req, "Invalid Request")
         
         row = self.env.db_query("""
             SELECT DISTINCT s.sid, n.value, e.value
@@ -78,13 +93,13 @@ class SSO(Component):
         try:
             username, name, email = row[0]
         except (IndexError, ValueError):
-            self._error(req, "Internal Server Error", "Internal Server Error")
+            self.__error(req, "Internal Server Error", "Internal Server Error")
         
-        reply = self._encode_message({"nonce": nonce,
-                                      "username": username,
-                                      "external_id": username,
-                                      "name": name or "",
-                                      "email": email or ""})
+        reply = self.__encode_message({"nonce": nonce,
+                                       "username": username,
+                                       "external_id": username,
+                                       "name": name or "",
+                                       "email": email or ""})
         req.redirect("%s?%s" % (self.sso_redirect, reply))
         
 
