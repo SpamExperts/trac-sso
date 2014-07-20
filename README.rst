@@ -24,4 +24,10 @@ to Trac. To configure the add to your Trac configuration file the shared secret 
     
 And grant the ``SSO_LOGIN`` permission to any users/groups of users you want to. 
 
+To configure multiple SSO endpoints simply pre-prepend a different endpoint to your configurations. 
+The default one is ``sso``. For example to configure the ``/sso2`` endpoint::
+
+    [sso]
+    sso2.sso_secret = othertestsecret
+    sso2.sso_redirect = https://myother.discourse.example.com/session/sso_login
 
